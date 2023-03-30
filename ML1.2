@@ -131,7 +131,35 @@ plot(roc_perf,
 roc.curve(test$Attrition, att_pred_1)
 as.numeric(performance(roc_pred, "auc")@y.values)
 
+Logistic_model_a <-glm(Attrition ~ ., data=data_balanced_under, family=binomial())
+summary(Logistic_model_a)
+Logistic_model_6 <-step(glm(Attrition ~ ., data=data_balanced_under, family=binomial()))
+#####^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^###
 
+summary(Logistic_model_6)
+vif(Logistic_model_6)
+stepmodel6 = step(Logistic_model_6, direction="both")
+formula(stepmodel6)
+summary(stepmodel6)
+exp(coef(stepmodel6))
+att_pred_6 <- predict(object = stepmodel6, newdata = test, type = "response")
+head(att_pred_6)
+summary(att_pred_6)
+test$predicted6<-ifelse(att_pred_6>=0.5, 1, 0)
+head(test$predicted6)
+table(test$Attrition, test$predicted6)
+prop.table(table(test$Attrition, test$predicted6))
+confusionMatrix(data = as.factor(test$predicted6),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+roc_pred6 <- prediction(predictions = att_pred_6  , labels = test$Attrition)
+roc_perf6 <- performance(roc_pred6 , "tpr" , "fpr")
+plot(roc_perf6,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+roc.curve(test$Attrition, att_pred_6)
+as.numeric(performance(roc_pred6, "auc")@y.values)
 
 ##### MODEL 7 #######
 Logistic_model_7 <-glm(Attrition~Age+BusinessTravel+JobLevel+MaritalStatus+NumCompaniesWorked+TotalWorkingYears+TrainingTimesLastYear+YearsAtCompany+YearsWithCurrManager+EnvironmentSatisfaction+JobSatisfaction, data=data_balanced_under, family=binomial())
