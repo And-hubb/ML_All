@@ -1,0 +1,431 @@
+library(dplyr)
+library(ggplot2)
+library(class)
+library(caret)
+library(data.table)
+library(ROCR)
+library(ROSE) #Sampling-over and under, ROC and AUC curve
+library(readxl)
+
+#canterra = read_xlsx("Employee_Data_Project.xlsx")
+canterra = read.csv("Employee_Data_Project.csv")
+colSums(is.na(canterra)) #checking for NAs. there are no NAs
+dim(canterra)
+head(canterra)
+
+#library(fastDummies)
+#data <- dummy_cols(data, select_columns = 'Attrition')
+#data$Attrition = data$Attrition_Yes
+#data <- subset(data, select = -c(Attrition_Yes, Attrition_No))
+
+#Try 1## as.numeric(as.factor(canterra$Attrition)) #run if you want to change "Attrition" from Yes/No to 1/0
+#Try 2## #library(plyr)
+### converting Yes and No to 1 and 0's
+#canterra$Attrition <- revalue(canterra$Attrition, c("Yes"=1))
+#canterra$Attrition <- revalue(canterra$Attrition, c("No"=0))
+#head(canterra)
+#Try 3##  as.logical(canterra$Attrition1)
+#canterra$Attrition1[canterra$Attrition == "Yes"] = "True"
+#canterra$Attrition1[canterra$Attrition == "No"] = "False"
+class(canterra$Attrition)
+#rm(Attrition2)
+class(canterra$TotalWorkingYears)
+## TRY 4 FROM RUSS ###
+#library(fastDummies)
+#data <- dummy_cols(data, select_columns = 'Attrition')
+#data$Attrition = data$Attrition_Yes
+#data <- subset(data, select = -c(Attrition_Yes, Attrition_No))
+##End from RUSS##
+
+table(canterra$Attrition) #table of no's and yes's
+prop.table(table(canterra$Attrition)) #no's and yes percent
+#16.12245 % attrition
+
+#1. Data splitting into training and test (70:30)
+#Create split, any column is fine
+set.seed(123)  # for reproducibility
+index <- createDataPartition(canterra$Attrition, p = 0.7, list = FALSE)
+
+train <- canterra[index, ]
+test  <- canterra[-index, ]
+#####
+table(train$Attrition)
+table(test$Attrition)
+prop.table(table(train$Attrition))
+prop.table(table(test$Attrition))
+
+#2. Missing values
+sapply(train,function(x) sum(is.na(x)))
+sapply(test,function(x) sum(is.na(x)))
+## no missing values
+
+#Replacing NumCompaniesWorked by median
+train$NumCompaniesWorked[is.na(train$NumCompaniesWorked)] = median(train$NumCompaniesWorked, na.rm = TRUE)
+test$NumCompaniesWorked[is.na(test$NumCompaniesWorked)] = median(test$NumCompaniesWorked, na.rm = TRUE)
+
+#Replacing EnvironmentSatisfaction by median
+train$EnvironmentSatisfaction[is.na(train$EnvironmentSatisfaction)] = median(train$EnvironmentSatisfaction, na.rm = TRUE)
+test$EnvironmentSatisfaction[is.na(test$EnvironmentSatisfaction)] = median(test$EnvironmentSatisfaction, na.rm = TRUE)
+
+#Replacing JobSatisfaction by median
+train$JobSatisfaction[is.na(train$JobSatisfaction)] = median(train$JobSatisfaction, na.rm = TRUE)
+test$JobSatisfaction[is.na(test$JobSatisfaction)] = median(test$JobSatisfaction, na.rm = TRUE)
+
+#Replacing TotalWorkingYears by median
+train$TotalWorkingYears[is.na(train$TotalWorkingYears)] = median(train$TotalWorkingYears, na.rm = TRUE)
+test$TotalWorkingYears[is.na(test$TotalWorkingYears)] = median(test$TotalWorkingYears, na.rm = TRUE)
+
+#3. DOWNSAMPLING # since 1's only make up about 15% of the data we want the data to be almost 50/50 1s and 0s. otherwise it could be 85% accurate and miss every "1" for attrition
+install.packages("ROSE")
+library(ROSE)
+data_balanced_under <- ovun.sample(Attrition ~ ., data = train, method = "under",N = 1000)$data
+table(data_balanced_under$Attrition)
+
+#Logistic_model_0 <-glm(Attrition ~ JobSatisfaction+YearsAtCompany+TotalWorkingYears, data=test, family=binomial())
+#summary(Logistic_model_0)
+Logistic_model_1 <-glm(Attrition ~ JobSatisfaction+YearsAtCompany+TotalWorkingYears, data=data_balanced_under, family=binomial())
+summary(Logistic_model_1)
+
+exp(coef(Logistic_model_1))
+#Check multicollinearity
+library(car)
+vif(Logistic_model_1)
+
+#Using Stepwise regression
+stepmodel = step(Logistic_model_1, direction="both")
+
+formula(stepmodel)
+summary(stepmodel)
+
+#Odds ratio
+exp(coef(stepmodel))
+
+#5. Prediction on the test set
+
+att_pred_1 <- predict(object = stepmodel, newdata = test, type = "response")
+head(att_pred_1)
+summary(att_pred_1)
+
+#Lets set the threshold to 0.50 for predicting into 1
+test$predicted<-ifelse(att_pred_1>=0.5, 1, 0)
+head(test$predicted)
+
+#6. Model Performance
+#Accuracy
+table(test$Attrition, test$predicted)
+prop.table(table(test$Attrition, test$predicted))
+
+confusionMatrix(data = as.factor(test$predicted),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+
+#ROC
+roc_pred <- prediction(predictions = att_pred_1  , labels = test$Attrition)
+roc_perf <- performance(roc_pred , "tpr" , "fpr")
+plot(roc_perf,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+
+# AUC (TWO WAYS)
+roc.curve(test$Attrition, att_pred_1)
+as.numeric(performance(roc_pred, "auc")@y.values)
+
+
+
+##### MODEL 7 #######
+Logistic_model_7 <-glm(Attrition~Age+BusinessTravel+JobLevel+MaritalStatus+NumCompaniesWorked+TotalWorkingYears+TrainingTimesLastYear+YearsAtCompany+YearsWithCurrManager+EnvironmentSatisfaction+JobSatisfaction, data=data_balanced_under, family=binomial())
+summary(Logistic_model_7)
+vif(Logistic_model_7)
+stepmodel7 = step(Logistic_model_7, direction="both")
+formula(stepmodel7)
+summary(stepmodel7)
+exp(coef(stepmodel7))
+att_pred_7 <- predict(object = stepmodel7, newdata = test, type = "response")
+head(att_pred_7) 
+summary(att_pred_7)
+test$predicted7<-ifelse(att_pred_7>=0.5, 1, 0)
+head(test$predicted7)
+table(test$Attrition, test$predicted7)
+prop.table(table(test$Attrition, test$predicted7))
+confusionMatrix(data = as.factor(test$predicted7),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+roc_pred7 <- prediction(predictions = att_pred_7  , labels = test$Attrition)
+roc_perf7 <- performance(roc_pred7 , "tpr" , "fpr")
+plot(roc_perf7,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+roc.curve(test$Attrition, att_pred_7)
+as.numeric(performance(roc_pred7, "auc")@y.values)
+
+
+###################################################################
+library(caret) #For confusionMatrix(), training ML models, and more
+library(class) #For knn()
+library(dplyr) #For some data manipulation and ggplot
+library(pROC)  #For ROC curve and estimating the area under the ROC curve
+library(e1071) #For svm() function
+library(fastDummies)
+library(kernlab)
+
+employee_data =  read.csv("EmployeeData.csv", sep = ",", stringsAsFactors = TRUE)
+str(employee_data)
+colSums(is.na(employee_data)) #checking for NAs. there are no NAs
+dim(employee_data)
+head(employee_data)
+summary(employee_data)
+
+#Create dummy variables for each level of the categorical variables of interest
+employee_dummies = dummy_cols(employee_data, select_columns = c('Attrition','Gender','MaritalStatus','BusinessTravel'))
+
+#Let's remove variables that we will not use for distance calculation
+#due to their data type being categorical (such as sex) or not being relevant (such as Id)
+#Also, removing one dummy level of each categorical variables
+final_data = 
+  employee_dummies %>% select(-c(Attrition, Gender, MaritalStatus, BusinessTravel, Attrition_No, Gender_Male, EmployeeID, StandardHours))
+final_data = final_data %>% dplyr::select(Attrition_Yes, everything()) #moving Attrition_Yes to first column
+final_data$Attrition_Yes = as.factor(final_data$Attrition_Yes)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#1. Data splitting into training and test (70%:30%)
+#You can take a random sample (70%) of numbers between 1 and number of rows (891)
+set.seed(123)  # Set a seed for reproducibility
+index = sample(nrow(final_data),0.7*nrow(final_data)) 
+#You can also use createDataPartition() function from caret. 
+#index = createDataPartition(titanic$Survived,p=0.7,list=FALSE)
+
+train_data = final_data[index, ]
+test_data = final_data[-index, ]
+
+#Check the ratio of 0's and 1's in the target variable
+prop.table(table(train_data$Attrition_Yes))
+prop.table(table(test_data$Attrition_Yes))
+
+#fixing bugs
+rm(index)
+rm(final_data)
+rm(test_data)
+rm(train_data)
+rm(index)
+rm(index)
+##################################################################################################
+#Resampling to address class imbalance (optional for this dataset)
+train_data = upSample(x=train_data[,-1], y=train_data[,1], yname = "Attrition_Yes")
+?upSample
+#2. Clean and Preprocess Data 
+
+#Check for columns/variables with missing values
+sapply(train_data, function(x){sum(is.na(x))})
+sapply(test_data, function(x){sum(is.na(x))})
+
+#what fraction is missing?
+sum(is.na(train_data$Age))/nrow(train_data)
+sum(is.na(test_data$Age))/nrow(test_data)
+
+
+#As for the missing 'age' data, we have three options:
+#use a good estimate or create a model to predict missing 'age'
+#delete the observations that contain a 'NA' entry (small number of observations)
+#remove age as a predictor (age is highly correlated with survival so it's not recommended)
+
+#There is 126 missing value in age column, around 20% of our data. 
+#Instead of removing the data, let's try to replace missing ones with the mean of age.
+
+# NOTE: We always split the data before any imputation or scaling.
+# Then, since we're pretending 'test' (i.e., validation) to the be an unseen dataset, 
+# we will use information from train data to impute the test dataset!
+
+train_data[is.na(train_data$NumCompaniesWorked),'NumCompaniesWorked'] = mean(train_data$Age,na.rm=TRUE) 
+test_data[is.na(test_data$NumCompaniesWorked),'NumCompaniesWorked'] = mean(train_data$Age,na.rm=TRUE) #mean of age in train dataset!
+
+#Check to make sure there's no missing age
+sum(is.na(train_data$NumCompaniesWorked))
+sum(is.na(test_data$NumCompaniesWorked))
+
+#### more TotalWorkingYears#########################
+train_data[is.na(train_data$TotalWorkingYears),'TotalWorkingYears'] = mean(train_data$Age,na.rm=TRUE) 
+test_data[is.na(test_data$TotalWorkingYears),'TotalWorkingYears'] = mean(train_data$Age,na.rm=TRUE) #mean of age in train dataset!
+
+#Check to make sure there's no missing age
+sum(is.na(train_data$TotalWorkingYears))
+sum(is.na(test_data$TotalWorkingYears))
+
+#### more EnvironmentSatisfaction#########################
+train_data[is.na(train_data$EnvironmentSatisfaction),'EnvironmentSatisfaction'] = mean(train_data$Age,na.rm=TRUE) 
+test_data[is.na(test_data$EnvironmentSatisfaction),'EnvironmentSatisfaction'] = mean(train_data$Age,na.rm=TRUE) #mean of age in train dataset!
+
+#Check to make sure there's no missing age
+sum(is.na(train_data$EnvironmentSatisfaction))
+sum(is.na(test_data$EnvironmentSatisfaction))
+
+#### more JobSatisfaction#########################
+train_data[is.na(train_data$JobSatisfaction),'JobSatisfaction'] = mean(train_data$Age,na.rm=TRUE) 
+test_data[is.na(test_data$JobSatisfaction),'JobSatisfaction'] = mean(train_data$Age,na.rm=TRUE) #mean of age in train dataset!
+
+#Check to make sure there's no missing age
+sum(is.na(train_data$JobSatisfaction))
+sum(is.na(test_data$JobSatisfaction))
+
+#Final check:
+sapply(train_data, function(x){sum(is.na(x))})
+sapply(test_data, function(x){sum(is.na(x))})
+
+
+#3. SVM Model
+
+#We use function svm() from the package 'e1071' to run the model
+#Similar to KNN, the data needs to be scaled for SVM method
+#But we don't need to go through the scaling steps beforehand/separately, 
+#since the svm() function itself has a scale option.
+
+SVM1 = svm(formula = Attrition_Yes ~ .,
+           data = train_data,
+           type = 'C-classification',
+           kernel = 'linear', 
+           scale=TRUE) 
+
+summary(SVM1)
+#The output indicates that a linear kernel was used with default cost of 1, 
+#and that there were 421 support vectors, 210 in one class and 211 in the other. 
+
+#which observations are support vectors (head() prints the index of the first few)
+head(SVM1$index)
+
+
+#What if we instead used a smaller value of the cost parameter?
+SVM2 = svm(formula = Attrition_Yes ~ .,
+           data = train_data,
+           type = 'C-classification',
+           kernel = 'linear', 
+           cost=0.1,
+           scale=TRUE)
+
+#426 support vectors (wider margin)
+summary(SVM2)
+
+
+#4. Tuning SVM Model (searching for the best parameters)
+
+#The e1071 library includes a built-in function, tune(), to perform cross validation. 
+#By default, tune() performs ten-fold cross-validation on a set of models of interest. 
+#In order to use this function, we pass in relevant information about the set of models that are under consideration. 
+#Setting the probability to TRUE provides probability predictions to later use for ROC curve.
+set.seed(123)
+tune.out = tune(svm, Attrition_Yes~., data=train_data, kernel ="linear", probability=TRUE, ranges=list(cost=c(0.001,0.01,0.1,1,5,10)))
+
+summary(tune.out)
+#lowest cross validation error for cost parameter of 1.
+
+
+#The tune() function stores the best model obtained, which can be accessed as follows:
+bestmod = tune.out$best.model
+SVM_pred = predict(bestmod, newdata = test_data[-1]) #obtaining predicted classes
+
+#Obtaining predicted probabilities (to use in creating ROC curves to compare different models)
+SVM_prob = attributes(predict(bestmod, newdata=test_data[-1], probability=TRUE))$probabilities[,1]
+
+#3. Check model evaluation
+confusionMatrix(data = SVM_pred, 
+                reference = test_data$Attrition_Yes, 
+                positive = "1")
+
+#4. If we change to Gaussian Kernel, are we going to see an improvement in our model?
+
+#we add the gamma hyperparameter, 
+#Gamma decides that how much curvature we want in a decision boundary. 
+#High values of gamma means more curvature and low values mean less curvature
+SVMR = svm(formula = Attrition_Yes ~ .,
+           data = train_data,
+           type = 'C-classification',
+           cost=1,
+           gamma=0.05,
+           kernel='radial')
+summary(SVMR)
+
+#We can perform cross-validation using tune() to select the best choice of cost and gamma for an SVM with a radial kernel
+set.seed(123)
+tune.out2 = tune(svm, Attrition_Yes ~., data=train_data, kernel ="radial", probability=TRUE,
+                 ranges=list(cost=c(0.01,0.1,1,5,10), gamma=c(0.5,1,2,3)))
+summary(tune.out2)
+
+bestmod2 = tune.out2$best.model
+SVMR_pred = predict(bestmod2, newdata = test_data[-1]) #obtaining predicted classes
+
+#Obtaining predicted probabilities
+SVMR_prob = attributes(predict(bestmod2, newdata=test_data[-1], probability=TRUE))$probabilities[,1]
+
+#Check model evaluation
+confusionMatrix(data = SVMR_pred, 
+                reference = test_data$Attrition_Yes, 
+                positive = "1")
+
+
+
+#Using CARET Package for cross validation and parameter tuning
+# Read more about model training and tuning using caret package:
+# https://topepo.github.io/caret/model-training-and-tuning.html
+
+#To get probability values using this method, we need to go through an extra step
+#The levels of the target variables need to change to "Yes/No" instead of "1/0"!
+train_data_copy = train_data
+test_data_copy = test_data
+
+levels(train_data_copy$Attrition_Yes) = c("No","Yes")
+levels(test_data_copy$Attrition_Yes) = c("No","Yes")
+
+# We can set our cross validation parameters using trainControl()
+# Specify 10-fold cross validation
+# classProbs=T makes sure probabilities are also calculated and can be accessed later
+ctrl = trainControl(method="cv",number=10,classProbs=TRUE)
+
+
+##############@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# train() is a general function from caret package that can handle many methods
+# Here we're using "svmRadial" based on the CV parameters that we set earlier
+# Other methods are "svmLinear" and "svmPoly"
+# By setting tuneLength=10, the function tests 10 different value of C
+set.seed(123)
+SVMR_caret = train(
+  Attrition_Yes ~ ., data = train_data_copy,
+  method = "svmRadial", trControl = ctrl, 
+  preProcess = c("center","scale"), tuneLength = 10)
+
+SVMR_caret
+plot(SVMR_caret)
+plot(varImp(SVMR_caret))
+
+summary(SVMR_caret)
+#To get the predicted class/category for each data in test
+#Note: When using the train() function from "caret" package, 
+#      the model automatically chooses the best value of k to use in prediction
+SVMR_pred2 = predict(SVMR_caret, test_data_copy[,-1], type="raw")
+
+#To get the predicted probability of belonging to each class/category
+SVMR_prob2 = predict(SVMR_caret, test_data_copy[,-1], type="prob")[,2]
+
+confusionMatrix(data = SVMR_pred2, 
+                reference = test_data_copy$Attrition_Yes, 
+                positive = "Yes")
+
+
+#Comparing models:
+#SVM_prob: best tuned model using linear kernel and cost parameter
+#SVMR_prob: best tuned model using radial kernel & cross validated parameters over user-defined values (e1071 package)
+#SVMR_prob2: best tuned model using radial kernel & cross validated parameters based on automatic search (caret package)
+
+#Using plot.roc() and auc() functions from "pROC" package:
+#Plot the ROC curve for model_1 and then add/overlay the ROC curve for model_2 on top of the first one
+plot.roc(test_data$Attrition_Yes,SVM_prob,legacy.axes=T)
+plot.roc(test_data$Attrition_Yes,SVMR_prob,add=TRUE,col="red",lty=2,legacy.axes=T)
+plot.roc(test_data_copy$Attrition_Yes,SVMR_prob2,add=TRUE,col="blue",lty=3)
+legend("bottomright",legend=c("SVM (linear)","SVM (radial)-e1071","SVM (radial)-caret"),
+       col=c("black","red","blue"),lty=c(1,2,3),cex=0.75)
+
+
+#Calculate the area under the ROC curve for the classifiers
+auc(test_data$Attrition_Yes,SVM_prob)
+auc(test_data$Attrition_Yes,SVMR_prob)
+auc(test_data_copy$Attrition_Yes,SVMR_prob2)
